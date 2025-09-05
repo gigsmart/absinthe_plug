@@ -21,8 +21,8 @@ This functionality is included in the main `absinthe_plug` package:
 ```elixir
 def deps do
   [
-    {:absinthe, "~> 1.8"},
-    {:absinthe_plug, "~> 1.5"},
+    {:absinthe, git: "https://github.com/gigsmart/absinthe.git", branch: "gigmart/defer-stream-incremental"},
+    {:absinthe_plug, git: "https://github.com/gigsmart/absinthe_plug.git", branch: "gigmart/defer-stream-incremental"},
     {:plug, "~> 1.12"},
     {:jason, "~> 1.2"}
   ]
