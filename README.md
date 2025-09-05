@@ -124,6 +124,60 @@ forward "/graphiql",
 
 See the API documentation for `Absinthe.Plug.GraphiQL` for more information.
 
+## Incremental Delivery
+
+Absinthe.Plug supports GraphQL `@defer` and `@stream` directives for incremental delivery over HTTP using Server-Sent Events (SSE). This enables real-time streaming of deferred fragments and list items while maintaining HTTP compatibility.
+
+Key features:
+- ✅ **Server-Sent Events**: Standards-compliant SSE implementation
+- ✅ **HTTP/2 Compatible**: Efficient multiplexing support  
+- ✅ **CORS Support**: Cross-origin streaming capabilities
+- ✅ **Graceful Fallback**: Automatic fallback to standard GraphQL responses
+
+**Installation with incremental delivery:**
+
+```elixir
+def deps do
+  [
+    {:absinthe, git: "https://github.com/gigsmart/absinthe.git", branch: "gigmart/defer-stream-incremental"},
+    {:absinthe_plug, git: "https://github.com/gigsmart/absinthe_plug.git", branch: "gigmart/defer-stream-incremental"},
+    {:plug, "~> 1.12"},
+    {:jason, "~> 1.2"}
+  ]
+end
+```
+
+**Example usage:**
+
+```javascript
+// Client-side SSE connection
+const eventSource = new EventSource('/api/graphql/stream?' + new URLSearchParams({
+  query: `
+    query GetPosts {
+      posts @stream(initialCount: 3, label: "posts") {
+        id
+        title
+        ... @defer(label: "content") {
+          content
+        }
+      }
+    }
+  `
+}));
+
+eventSource.addEventListener('initial', (event) => {
+  const data = JSON.parse(event.data);
+  console.log('Initial data:', data);
+});
+
+eventSource.addEventListener('incremental', (event) => {
+  const increment = JSON.parse(event.data);
+  console.log('Incremental data:', increment);
+});
+```
+
+For comprehensive documentation on HTTP incremental delivery patterns, see [Absinthe Incremental Delivery Guide](https://hexdocs.pm/absinthe/incremental-delivery.html).
+
 ## Community
 
 The project is under constant improvement by a growing list of
