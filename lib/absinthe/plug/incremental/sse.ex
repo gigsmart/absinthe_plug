@@ -45,10 +45,7 @@ defmodule Absinthe.Plug.Incremental.SSE do
   require Logger
   
   alias Absinthe.Plug.Incremental.SSE.{EventFormatter, ConnectionManager, QueryProcessor}
-  
-  @content_type "text/event-stream"
-  @keep_alive_interval 30_000  # 30 seconds
-  
+
   @impl true
   def init(conn, options) do
     if ConnectionManager.accepts_sse?(conn) do
