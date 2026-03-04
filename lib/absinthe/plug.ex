@@ -364,11 +364,12 @@ defmodule Absinthe.Plug do
   end
 
   def subscribe(conn, topic, %{context: %{pubsub: pubsub}} = config) do
+    alias Absinthe.Plug.Incremental.SSE.ConnectionManager
+
     pubsub.subscribe(topic)
 
     conn
-    |> put_resp_header("content-type", "text/event-stream")
-    |> send_chunked(200)
+    |> ConnectionManager.setup_sse_headers()
     |> subscribe_loop(topic, config)
   end
 
@@ -389,7 +390,7 @@ defmodule Absinthe.Plug do
         conn
     after
       30_000 ->
-        case chunk(conn, ":ping\n\n") do
+        case chunk(conn, ": keep-alive\n\n") do
           {:ok, conn} ->
             subscribe_loop(conn, topic, config)
 
