@@ -368,11 +368,12 @@ defmodule Absinthe.Plug do
   end
 
   def subscribe(conn, topic, %{context: %{pubsub: pubsub}} = config) do
+    alias Absinthe.Plug.Incremental.SSE.ConnectionManager
+
     pubsub.subscribe(topic)
 
     conn
-    |> put_resp_header("content-type", "text/event-stream")
-    |> send_chunked(200)
+    |> ConnectionManager.setup_sse_headers()
     |> subscribe_loop(topic, config)
   end
 
@@ -548,7 +549,7 @@ defmodule Absinthe.Plug do
       {:ok, %{execution: %{incremental_delivery: true}} = bp, _} ->
         conn = apply_before_send(conn, [bp], config)
 
-        if Absinthe.Plug.Incremental.SSE.ConnectionManager.accepts_sse?(conn) do
+        if accepts_sse?(conn) do
           conn = deliver_incremental_sse(conn, bp)
           {conn, {:ok, :streaming}}
         else
@@ -562,6 +563,12 @@ defmodule Absinthe.Plug do
       val ->
         {conn, val}
     end
+  end
+
+  defp accepts_sse?(conn) do
+    conn
+    |> Plug.Conn.get_req_header("accept")
+    |> Enum.any?(&String.contains?(&1, "text/event-stream"))
   end
 
   defp deliver_incremental_sse(conn, blueprint) do
@@ -624,7 +631,12 @@ defmodule Absinthe.Plug do
 
     # Send initial event
     initial_event = EventFormatter.format_event("next", initial_response, 0)
-    {:ok, conn} = Plug.Conn.chunk(conn, initial_event)
+
+    conn =
+      case Plug.Conn.chunk(conn, initial_event) do
+        {:ok, conn} -> conn
+        {:error, _} -> conn
+      end
 
     # Send incremental events — data already resolved, just deliver
     {conn, _event_id} =
