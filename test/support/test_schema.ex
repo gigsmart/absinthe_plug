@@ -66,6 +66,14 @@ defmodule Absinthe.Plug.TestSchema do
         raise "complex string must not be resolved"
       end
     end
+
+    # Unguarded raise: unlike :expensive and :complex, this one is meant to
+    # actually run, so a batch can be tested with one exploding document.
+    field :boom, :string do
+      resolve fn _, _ ->
+        raise "resolver exploded"
+      end
+    end
   end
 
   subscription do

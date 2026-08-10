@@ -314,6 +314,43 @@ defmodule Absinthe.Plug.TransportBatchingTest do
     assert 1 == Counter.read(pid)
   end
 
+  test "a raising resolver in one document does not fail the whole batch" do
+    opts = Absinthe.Plug.init(schema: TestSchema)
+
+    payload = """
+    [{
+      "id": "1",
+      "query": "{ item(id: \\"foo\\") { name } }",
+      "variables": {}
+    }, {
+      "id": "2",
+      "query": "{ boom }",
+      "variables": {}
+    }, {
+      "id": "3",
+      "query": "{ item(id: \\"bar\\") { name } }",
+      "variables": {}
+    }]
+    """
+
+    assert %{status: 200, resp_body: resp_body} =
+             conn(:post, "/", payload)
+             |> put_req_header("content-type", "application/json")
+             |> plug_parser
+             |> absinthe_plug(opts)
+
+    assert [first, second, third] = resp_body
+
+    # The healthy documents still resolve — one bad document must not take the
+    # rest of the batch down with it.
+    assert %{"id" => "1", "payload" => %{"data" => %{"item" => %{"name" => "Foo"}}}} = first
+    assert %{"id" => "3", "payload" => %{"data" => %{"item" => %{"name" => "Bar"}}}} = third
+
+    # ...and the bad one reports an error in its own slot, keeping batch ordering.
+    assert %{"id" => "2", "payload" => %{"errors" => [%{"message" => _} | _]}} = second
+    refute Map.has_key?(second["payload"], "data")
+  end
+
   test "it handles complexity errors" do
     opts = Absinthe.Plug.init(schema: TestSchema, max_complexity: 100, analyze_complexity: true)
 

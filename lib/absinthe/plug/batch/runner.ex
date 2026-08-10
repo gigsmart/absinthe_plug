@@ -40,8 +40,12 @@ defmodule Absinthe.Plug.Batch.Runner do
         {:ok, _bp, query, index} -> {query, index}
       end)
 
+    # abort_on_error: false makes BatchResolver rescue a raising resolver and
+    # return the :error sentinel for that one document. Left at its `true`
+    # default, the exception escapes Absinthe.Plug.call/2 and 500s the whole
+    # HTTP response — every document in the batch fails because one did.
     blueprints
-    |> Absinthe.Pipeline.BatchResolver.run(schema: schema)
+    |> Absinthe.Pipeline.BatchResolver.run(schema: schema, abort_on_error: false)
     |> Enum.zip(queries_and_indices)
     |> Enum.map(fn {bp, {query, i}} ->
       {i, build_result(bp, query)}
@@ -52,6 +56,14 @@ defmodule Absinthe.Plug.Batch.Runner do
     Enum.map(invalid_queries, fn {:error, bp, query, i} ->
       {i, build_result(bp, query)}
     end)
+  end
+
+  # BatchResolver.execute/5 substitutes :error for any document whose resolution
+  # raised (it has already logged the exception and stacktrace). There is no
+  # blueprint left to finish, so shape the error slot by hand — it must keep the
+  # :result key, which apply_before_send/3 and run/4 both read.
+  defp build_result(:error, _query) do
+    %{result: %{errors: [%{message: "Internal server error"}]}}
   end
 
   defp build_result(bp, query) do
