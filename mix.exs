@@ -47,7 +47,7 @@ defmodule Absinthe.Plug.Mixfile do
 
   defp deps do
     [
-      {:absinthe, git: "https://github.com/gigsmart/absinthe.git", branch: "gigmart/defer-stream-incremental"},
+      {:absinthe, git: "https://github.com/gigsmart/absinthe.git", branch: "feat/real-defer"},
       {:plug, "~> 1.4"},
       {:jason, ">= 0.0.0", only: [:dev, :test]},
       {:ex_doc, "~> 0.20", only: :dev},
