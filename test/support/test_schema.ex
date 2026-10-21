@@ -3,6 +3,7 @@ defmodule Absinthe.Plug.TestSchema do
   import Absinthe.Resolution.Helpers
 
   import_types Absinthe.Plug.Types
+  import_directives Absinthe.Type.BuiltIns.IncrementalDirectives
 
   @items %{
     "foo" => %{id: "foo", name: "Foo"},

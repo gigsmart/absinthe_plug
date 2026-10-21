@@ -141,7 +141,8 @@ defmodule Absinthe.Plug do
     :max_complexity,
     :token_limit,
     :transport_batch_payload_key,
-    :standard_sse
+    :standard_sse,
+    :incremental
   ]
   @raw_options [
     :analyze_complexity,
@@ -169,6 +170,7 @@ defmodule Absinthe.Plug do
   - `:token_limit` -- (Optional) Set a limit on the number of allowed parseable tokens in the GraphQL query. Queries with exceedingly high token counts can be expensive to parse. If a query's token count exceeds the set limit, an error will be returned during Absinthe parsing (default: `:infinity`).
   - `:transport_batch_payload_key` -- (Optional) Set whether or not to nest Transport Batch request results in a `payload` key. Older clients expected this key to be present, but newer clients have dropped this pattern. (default: `true`)
   - `:standard_sse` -- (Optional) Set whether or not to adopt SSE standard. Older clients don't support this key. (default: `false`)
+  - `:incremental` -- (Optional) When true, a single (non-batched) request whose `Accept` includes `multipart/mixed` executes with `@defer` enabled and, if anything was deferred, is answered as a `multipart/mixed; boundary="-"; deferSpec=20220824` stream. (default: `false`)
 
   """
   @type opts :: [
@@ -191,7 +193,8 @@ defmodule Absinthe.Plug do
           log_level: Logger.level(),
           pubsub: module | nil,
           transport_batch_payload_key: boolean,
-          standard_sse: boolean
+          standard_sse: boolean,
+          incremental: boolean
         ]
 
   @doc """
@@ -255,7 +258,8 @@ defmodule Absinthe.Plug do
       pubsub: pubsub,
       before_send: before_send,
       transport_batch_payload_key: transport_batch_payload_key,
-      standard_sse: standard_sse
+      standard_sse: standard_sse,
+      incremental: Keyword.get(opts, :incremental, false)
     }
   end
 
@@ -304,6 +308,9 @@ defmodule Absinthe.Plug do
       {:ok, %{"subscribed" => topic}} ->
         conn
         |> subscribe(topic, config)
+
+      {:incremental, bp, result_opts} ->
+        send_incremental(conn, bp, result_opts, config)
 
       {:ok, %{data: _} = result} ->
         conn
@@ -364,12 +371,11 @@ defmodule Absinthe.Plug do
   end
 
   def subscribe(conn, topic, %{context: %{pubsub: pubsub}} = config) do
-    alias Absinthe.Plug.Incremental.SSE.ConnectionManager
-
     pubsub.subscribe(topic)
 
     conn
-    |> ConnectionManager.setup_sse_headers()
+    |> put_resp_header("content-type", "text/event-stream")
+    |> send_chunked(200)
     |> subscribe_loop(topic, config)
   end
 
@@ -390,7 +396,7 @@ defmodule Absinthe.Plug do
         conn
     after
       30_000 ->
-        case chunk(conn, ": keep-alive\n\n") do
+        case chunk(conn, ":ping\n\n") do
           {:ok, conn} ->
             subscribe_loop(conn, topic, config)
 
@@ -453,7 +459,8 @@ defmodule Absinthe.Plug do
   @spec execute(Plug.Conn.t(), map) :: {Plug.Conn.t(), any}
   def execute(conn, config) do
     conn_info = %{
-      conn_private: (conn.private[:absinthe] || %{}) |> Map.put(:http_method, conn.method)
+      conn_private: (conn.private[:absinthe] || %{}) |> Map.put(:http_method, conn.method),
+      incremental: Map.get(config, :incremental, false) and accepts_multipart_mixed?(conn)
     }
 
     with {:ok, conn, request} <- Request.parse(conn, config),
@@ -541,13 +548,64 @@ defmodule Absinthe.Plug do
     %{document: document, pipeline: pipeline} =
       Request.Query.add_pipeline(query, conn_info, config)
 
+    pipeline =
+      if Map.get(conn_info, :incremental, false),
+        do: Absinthe.Incremental.enable(pipeline),
+        else: pipeline
+
     case Absinthe.Pipeline.run(document, pipeline) do
       {:ok, %{result: result} = bp, _} ->
         conn = apply_before_send(conn, [bp], config)
-        {conn, {:ok, result}}
+
+        if Absinthe.Incremental.pending?(bp) do
+          {conn, {:incremental, bp, result_opts(pipeline)}}
+        else
+          {conn, {:ok, result}}
+        end
 
       val ->
         {conn, val}
+    end
+  end
+
+  defp result_opts(pipeline) do
+    Enum.find_value(List.flatten(pipeline), [], fn
+      {Absinthe.Phase.Document.Result, opts} -> opts
+      _ -> nil
+    end)
+  end
+
+  defp accepts_multipart_mixed?(conn) do
+    conn
+    |> get_req_header("accept")
+    |> Enum.any?(&String.contains?(String.downcase(&1), "multipart/mixed"))
+  end
+
+  @multipart_content_type ~s(multipart/mixed; boundary="-"; deferSpec=20220824)
+  @multipart_part_header "\r\n---\r\ncontent-type: application/json; charset=utf-8\r\n\r\n"
+
+  defp send_incremental(conn, bp, result_opts, config) do
+    conn
+    |> put_resp_header("content-type", @multipart_content_type)
+    |> send_chunked(200)
+    |> send_parts(Absinthe.Incremental.initial_payload(bp), bp, result_opts, config)
+  end
+
+  defp send_parts(conn, payload, bp, result_opts, config) do
+    case chunk(conn, [@multipart_part_header, encode_json!(payload, config)]) do
+      {:ok, conn} when payload.hasNext ->
+        {payload, bp} = Absinthe.Incremental.next(bp, result_opts)
+        send_parts(conn, payload, bp, result_opts, config)
+
+      {:ok, conn} ->
+        case chunk(conn, "\r\n-----\r\n") do
+          {:ok, conn} -> conn
+          {:error, _} -> conn
+        end
+
+      # The client went away; stop resolving further waves.
+      {:error, _} ->
+        conn
     end
   end
 
