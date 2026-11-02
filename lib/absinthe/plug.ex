@@ -582,26 +582,34 @@ defmodule Absinthe.Plug do
   end
 
   @multipart_content_type ~s(multipart/mixed; boundary="-"; deferSpec=20220824)
-  @multipart_part_header "\r\n---\r\ncontent-type: application/json; charset=utf-8\r\n\r\n"
+  @multipart_part_header "\r\ncontent-type: application/json; charset=utf-8\r\n\r\n"
+  @multipart_delimiter "\r\n---"
 
   defp send_incremental(conn, bp, result_opts, config) do
     conn
     |> put_resp_header("content-type", @multipart_content_type)
     |> send_chunked(200)
-    |> send_parts(Absinthe.Incremental.initial_payload(bp), bp, result_opts, config)
+    |> send_parts(
+      @multipart_delimiter,
+      Absinthe.Incremental.initial_payload(bp),
+      bp,
+      result_opts,
+      config
+    )
   end
 
-  defp send_parts(conn, payload, bp, result_opts, config) do
-    case chunk(conn, [@multipart_part_header, encode_json!(payload, config)]) do
+  # A client emits a part once the delimiter after it arrives, so each part's
+  # chunk ends with that delimiter.
+  defp send_parts(conn, preamble, payload, bp, result_opts, config) do
+    closing = if payload.hasNext, do: @multipart_delimiter, else: @multipart_delimiter <> "--\r\n"
+
+    case chunk(conn, [preamble, @multipart_part_header, encode_json!(payload, config), closing]) do
       {:ok, conn} when payload.hasNext ->
         {payload, bp} = Absinthe.Incremental.next(bp, result_opts)
-        send_parts(conn, payload, bp, result_opts, config)
+        send_parts(conn, "", payload, bp, result_opts, config)
 
       {:ok, conn} ->
-        case chunk(conn, "\r\n-----\r\n") do
-          {:ok, conn} -> conn
-          {:error, _} -> conn
-        end
+        conn
 
       # The client went away; stop resolving further waves.
       {:error, _} ->
