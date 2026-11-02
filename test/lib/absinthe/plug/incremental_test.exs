@@ -30,6 +30,39 @@ defmodule Absinthe.Plug.IncrementalTest do
     end)
   end
 
+  # The test adapter only accumulates the body; this one also reports each chunk.
+  defmodule ChunkRecorder do
+    defdelegate send_chunked(state, status, headers), to: Plug.Adapters.Test.Conn
+
+    def chunk(state, body) do
+      send(self(), {:chunk, IO.iodata_to_binary(body)})
+      Plug.Adapters.Test.Conn.chunk(state, body)
+    end
+  end
+
+  test "each streamed chunk closes its own part, so a client emits it before the next wave" do
+    %{adapter: {Plug.Adapters.Test.Conn, state}} =
+      conn =
+      conn(:post, "/", Jason.encode!(%{query: @query}))
+      |> put_req_header("content-type", "application/json")
+      |> put_req_header("accept", "multipart/mixed")
+      |> plug_parser()
+
+    %{conn | adapter: {ChunkRecorder, state}}
+    |> Absinthe.Plug.call(Absinthe.Plug.init(schema: TestSchema, incremental: true))
+
+    assert_received {:chunk, first}
+    assert_received {:chunk, last}
+    refute_received {:chunk, _}
+
+    # What a client splitting on the delimiter has from the first chunk alone.
+    assert ["", initial, ""] = String.split(first, "\r\n---")
+    [_headers, json] = String.split(initial, "\r\n\r\n", parts: 2)
+    assert Jason.decode!(json) == %{"data" => %{"item" => %{"id" => "foo"}}, "hasNext" => true}
+
+    assert String.ends_with?(last, "\r\n-----\r\n")
+  end
+
   test "a deferring request that accepts multipart/mixed is streamed" do
     conn = request(Jason.encode!(%{query: @query}), incremental: true)
 
